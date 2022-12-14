@@ -1,5 +1,5 @@
-geom: geom.out
-	@./geom.out
+matrix: matrix.out
+	@./matrix.out
 
-geom.out: main.cpp geometry.h
-	@g++ -std=c++20 -o geom.out main.cpp -Wall -Wextra -Werror -fsanitize=address
+matrix.out: matrix.cpp matrix.h biginteger.h
+	@g++ -std=c++20 -o matrix.out matrix.cpp -Wall -Wextra -Werror -fsanitize=address
