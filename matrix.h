@@ -29,7 +29,7 @@ size_t reversebits(size_t x, size_t pw2) {
     size_t res = 0;
     for (size_t i = 0; i < pw2; i++) {
         if ((x >> i) & 1)
-            res |= (1 << (pw2 - i - 1));
+            res |= (static_cast<size_t>(1) << (pw2 - i - 1));
     }
     return res;
 }
@@ -85,6 +85,7 @@ namespace BigIntConst {
 const int MOD = 100;
 const int DIGITS = 2;
 const int TEN = 10;
+const int SMALL = 500;
 }  // namespace BigIntConst
 
 class PoweredInteger;
@@ -108,18 +109,6 @@ private:
         if (x != 1)
             return -1;
         return ans;
-    }
-
-    void upgrade(int x, int& zeros) {
-        if (x) {
-            for (int j = 0; j < zeros; j++) {
-                digits.push_back(0);
-            }
-            digits.push_back(x);
-            zeros = 0;
-        } else {
-            ++zeros;
-        }
     }
 
     void add1() {  // add 1 to the abs
@@ -172,46 +161,75 @@ private:
         return std::strong_ordering::equal;
     }
 
-    BigInteger add(const BigInteger& second, signs sign1 = signs::pos) const {
+    void add(const BigInteger& second, signs sign1 = signs::pos) {
         signs sign2 = mulsigns(second.sign, sign1);
         if (sign2 == signs::zero)
-            return BigInteger(*this);
-        if (sign == signs::zero)
-            return BigInteger(second, sign2);
-        BigInteger res = BigInteger();
-        size_t size = std::max(digits.size(), second.digits.size()) + 1;
+            return;
+        if (sign == signs::zero) {
+            *this = second;
+            sign = sign2;
+            return;
+        }
         int delta = 0;
-        int zeros = 0;
+        size_t sz = std::min(digits.size(), second.digits.size());
         if (sign == sign2) {
-            for (size_t i = 0; i < size; i++) {
-                int now = get(i) + second.get(i) + delta;
+            size_t i = 0;
+            for (; i < sz; i++) {
+                int now = digits[i] + second.digits[i] + delta;
                 delta = now / BigIntConst::MOD;
                 now = now % BigIntConst::MOD;
-                res.upgrade(now, zeros);
+                digits[i] = now;
             }
-            res.sign = sign;
-            return res;
+            while (i < second.size() || delta) {
+                int now = second.get(i) + delta;
+                delta = now / BigIntConst::MOD;
+                now = now % BigIntConst::MOD;
+                digits.push_back(now);
+                i++;
+            }
+            return;
         }
-        const BigInteger* abs1 = this;
-        const BigInteger* abs2 = &second;
-        bool swapped = false;
+
         if (cmpabs(second) == std::strong_ordering::less) {
-            std::swap(abs1, abs2);
-            swapped = true;
+            int zeros = 0;
+            BigInteger res = BigInteger();
+            sz = std::max(digits.size(), second.digits.size()) + 1;
+            for (size_t i = 0; i < sz; i++) {
+                int now = second.get(i) - get(i) + delta;
+                delta = 0;
+                if (now < 0) {
+                    delta = -1;
+                    now = now + BigIntConst::MOD;
+                }
+                if (now) {
+                    for (int j = 0; j < zeros; j++) {
+                        res.digits.push_back(0);
+                    }
+                    res.digits.push_back(now);
+                    zeros = 0;
+                } else {
+                    ++zeros;
+                }
+            }
+            res.sign = sign2;
+            if (zeros == static_cast<int>(sz))
+                res.sign = signs::zero;
+            *this = res;
+            return;
         }
-        for (size_t i = 0; i < size; i++) {
-            int now = (*abs1).get(i) - (*abs2).get(i) + delta;
+        for (size_t i = 0; i < size(); i++) {
+            int now = digits[i] - second.get(i) + delta;
             delta = 0;
             if (now < 0) {
                 delta = -1;
                 now = now + BigIntConst::MOD;
             }
-            res.upgrade(now, zeros);
+            digits[i] = now;
         }
-        res.sign = swapped ? sign2 : sign;
-        if (zeros == static_cast<int>(size))
-            res.sign = signs::zero;
-        return res;
+        while (!digits.empty() && digits.back() == 0)
+            digits.pop_back();
+        if (digits.empty())
+            sign = signs::zero;
     }
 
     long double getfirst(size_t cnt) const {
@@ -296,13 +314,23 @@ public:
         return sign != signs::zero;
     }
 
+    explicit operator long long() const {
+        long long res = 0;
+        long long pwr = 1;
+        for (auto z : digits) {
+            res += z * pwr;
+            pwr *= BigIntConst::MOD;
+        }
+        return res;
+    }
+
     BigInteger& operator+=(const BigInteger& second) {
-        *this = add(second);
+        add(second);
         return *this;
     }
 
     BigInteger& operator-=(const BigInteger& second) {
-        *this = add(second, signs::neg);
+        add(second, signs::neg);
         return *this;
     }
 
@@ -320,23 +348,66 @@ public:
             sign = mulsigns(sign, signs::neg);
             return *this;
         }
+        BigInteger swapped;
+        bool swap = false;
+        if (second.size() > size() && second.size() > 2) {
+            swap = true;
+            swapped = *this;
+            *this = second;
+        }
+        const BigInteger& secondUpd = swap ? swapped : second;
+        if (secondUpd.size() <= 2) {
+            long long mult = static_cast<long long>(secondUpd);
+            long long now = 0;
+            for (size_t i = 0; i < size(); i++) {
+                now += digits[i] * mult;
+                digits[i] = static_cast<int>(now % BigIntConst::MOD);
+                now /= BigIntConst::MOD;
+            }
+            while (now > 0) {
+                digits.push_back(static_cast<int>(now % BigIntConst::MOD));
+                now /= BigIntConst::MOD;
+            }
+            sign = mulsigns(sign, secondUpd.sign);
+            return *this;
+        }
+        if (secondUpd.size() < BigIntConst::SMALL) {
+            long long delta = 0;
+            BigInteger res;
+            for (size_t i = 0; i < size() + secondUpd.size() - 1; i++) {
+                for (size_t j = 0; j <= i && j < secondUpd.size(); j++) {
+                    if (i - j < size()) {
+                        delta += digits[i - j] * secondUpd.digits[j];
+                    }
+                }
+                res.digits.push_back(static_cast<int>(delta % BigIntConst::MOD));
+                delta /= BigIntConst::MOD;
+            }
+            while (delta > 0) {
+                res.digits.push_back(static_cast<int>(delta % BigIntConst::MOD));
+                delta /= BigIntConst::MOD;
+            }
+            res.sign = mulsigns(sign, secondUpd.sign);
+            *this = res;
+            return *this;
+        }
         size_t n = 1;
-        while (n < digits.size() || n < second.digits.size())
+        while (n < digits.size() || n < secondUpd.digits.size())
             n *= 2;
         n *= 2;
         vector<complex<double>> a(n, complex<double>(0, 0));
         for (size_t i = 0; i < digits.size(); i++) {
             a[i] = complex<double>(digits[i], 0);
         }
-        for (size_t i = 0; i < second.digits.size(); i++) {
-            a[i] = complex<double>(a[i].real(), second.digits[i]);
+        for (size_t i = 0; i < secondUpd.digits.size(); i++) {
+            a[i] = complex<double>(a[i].real(), secondUpd.digits[i]);
         }
         double phi = 2 * acos(-1) / static_cast<double>(n);
         complex<double> q = complex<double>(cos(phi), sin(phi));
         FFT(a, q, false);
         for (size_t i = 0; i <= n / 2; i++) {
-            complex<double> v1 = a[i] / 2.0;
-            complex<double> v2 = a[(n - i) % n] / 2.0;
+            complex<double> v1 = a[i] / static_cast<double>(2);
+            complex<double> v2 = a[(n - i) % n] / static_cast<double>(2);
             a[i] = (v1 + sopr(v2)) * divi(v1 - sopr(v2));
             a[(n - i) % n] = (v2 + sopr(v1)) * divi(v2 - sopr(v1));
         }
@@ -358,7 +429,7 @@ public:
             delta /= BigIntConst::MOD;
             pos++;
         }
-        sign = mulsigns(sign, second.sign);
+        sign = mulsigns(sign, secondUpd.sign);
         return *this;
     }
 
@@ -396,6 +467,59 @@ public:
         const BigInteger& swapped1 = (sign == signs::pos) ? *this : second;
         const BigInteger& swapped2 = (sign == signs::pos) ? second : *this;
         return swapped1.cmpabs(swapped2);
+    }
+
+    std::pair<BigInteger, BigInteger> smallDivide(BigInteger second) {
+        assert(second != 0);
+        if (sign == signs::zero)
+            return {*this, *this};
+        signs si2 = second.sign;
+        second.sign = signs::pos;
+        BigInteger res = 0;
+        BigInteger r = 0;
+        for (size_t i = digits.size() - 1;; i--) {
+            if (r == 0) {
+                if (digits[i] != 0) {
+                    r.digits.push_front(digits[i]);
+                    r.sign = signs::pos;
+                }
+            } else {
+                r.digits.push_front(digits[i]);
+            }
+            if (res != 0)
+                res.digits.push_front(0);
+            if (r >= second) {
+                if (res == 0) {
+                    //
+                    res.digits.push_front(0);
+                    res.sign = signs::pos;
+                }
+                int left = 1, right = BigIntConst::MOD;
+                while (left + 1 != right) {
+                    int m = (left + right) / 2;
+                    BigInteger temp = second;
+                    temp *= m;
+                    if (temp <= r) {
+                        left = m;
+                    } else {
+                        right = m;
+                    }
+                }
+                BigInteger temp = second;
+                temp *= left;
+                r -= temp;
+                res.digits.front() = left;
+            }
+            if (i == 0)
+                break;
+        }
+        if (res.sign != signs::zero) {
+            res.sign = mulsigns(sign, si2);
+        }
+        if (r.sign != signs::zero) {
+            r.sign = mulsigns(sign, si2);
+        }
+        return {res, r};
     }
 
     bool operator==(const BigInteger& second) const = default;
@@ -689,15 +813,19 @@ PoweredInteger divide(const BigInteger& first, const BigInteger& second, size_t 
 }
 
 BigInteger& operator/=(BigInteger& first, const BigInteger& second) {
+    if (first.size() < BigIntConst::SMALL && second.size() < BigIntConst::SMALL) {
+        first = first.smallDivide(second).first;
+        return first;
+    }
     PoweredInteger res = divide(first, second, 0);
     signs ressign = res.val.sign;
     BigInteger ans = static_cast<BigInteger>(res);
     res.val.digits.clear();
     ans.add1();
-    if ((ans * second).cmpabs(first) ==
-        std::strong_ordering::greater)  // for example, 228/3 = 75.999999999999999999999999999999=76, but rounded down
-                                        // to 75
+    if ((ans * second).cmpabs(first) == std::strong_ordering::greater) {
         ans.sub1();
+    }  // for example, 228/3 = 75.999999999999999999999999999999=76, but rounded down to 75
+
     if (ans.sign != signs::zero)
         ans.sign = ressign;
     first = ans;
@@ -711,6 +839,10 @@ BigInteger operator/(const BigInteger& first, const BigInteger& second) {
 }
 
 BigInteger& operator%=(BigInteger& first, const BigInteger& second) {
+    if (first.size() < BigIntConst::SMALL && second.size() < BigIntConst::SMALL) {
+        first = first.smallDivide(second).second;
+        return first;
+    }
     first = first - (first / second) * second;
     return first;
 }
@@ -787,27 +919,35 @@ public:
     }
 
     Rational& operator+=(const Rational& second) {
-        *this =
-            Rational(numerator * second.denominator + second.numerator * denominator, denominator * second.denominator);
+        numerator *= second.denominator;
+        numerator += second.numerator * denominator;
+        denominator *= second.denominator;
         normalize();
         return *this;
     }
 
     Rational& operator-=(const Rational& second) {
-        *this =
-            Rational(numerator * second.denominator - second.numerator * denominator, denominator * second.denominator);
+        numerator *= second.denominator;
+        numerator -= second.numerator * denominator;
+        denominator *= second.denominator;
         normalize();
         return *this;
     }
 
     Rational& operator*=(const Rational& second) {
-        *this = Rational(numerator * second.numerator, denominator * second.denominator);
+        numerator *= second.numerator;
+        denominator *= second.denominator;
         normalize();
         return *this;
     }
 
     Rational& operator/=(const Rational& second) {
-        *this = Rational(numerator * second.denominator, denominator * second.numerator);
+        numerator *= second.denominator;
+        denominator *= second.numerator;
+        if (denominator < 0) {
+            numerator *= -1;
+            denominator *= -1;
+        }
         normalize();
         return *this;
     }
@@ -1241,6 +1381,7 @@ public:
             int sz = 0;
             int cnt = 1;
             for (size_t i = 0; i < N; i++) {
+                double tt = static_cast<double>(clock()) / CLOCKS_PER_SEC;
                 if (res.val[i][j] != 0 && i != start) {
                     double t0 = static_cast<double>(clock()) / CLOCKS_PER_SEC;
                     Field a = res.val[start][j] / res.val[i][j];
@@ -1259,6 +1400,9 @@ public:
                         res.val[i][j1] -= res.val[start][j1];
                         t3 += static_cast<double>(clock()) / CLOCKS_PER_SEC - t0;
                     }
+                }
+                if (j == 7) {
+                    std::cerr << static_cast<double>(clock()) / CLOCKS_PER_SEC - tt << " ";
                 }
             }
             if constexpr (std::is_same<Rational, Field>::value) {
